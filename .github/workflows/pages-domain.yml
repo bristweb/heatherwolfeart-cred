@@ -1,8 +1,10 @@
 # Attaches cred.heatherwolfeart.com to the heatherwolfeart-cred Pages project.
-# Wrangler 4 has no `pages domain` command; this calls the Pages domains API
-# (POST /accounts/{account_id}/pages/projects/{project}/domains). When the zone
-# is on the same account, that call is what creates the proxied DNS record and
-# certificate. A hand-made CNAME to *.pages.dev returns Cloudflare 522.
+# Wrangler 4 has no `pages domain` command. The Pages domains API registers the
+# hostname (and the certificate) but does not publish DNS on its own: the first
+# run left the domain "pending" and the name did not resolve. This workflow
+# registers the hostname first, then ensures the proxied CNAME the dashboard
+# would create (same shape as new.heatherwolfeart.com). A CNAME created before
+# that registration returns Cloudflare 522.
 name: Ensure Pages custom domain
 on:
   workflow_dispatch:
@@ -23,6 +25,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PYTHONUNBUFFERED: "1"
         run: |
           python3 - << 'PY'
           import json, os, subprocess, sys, time, urllib.error, urllib.request
@@ -34,13 +37,8 @@ jobs:
 
           project = "heatherwolfeart-cred"
           host = "cred.heatherwolfeart.com"
-          base = (
-              "https://api.cloudflare.com/client/v4/accounts/"
-              + account
-              + "/pages/projects/"
-              + project
-              + "/domains"
-          )
+          api = "https://api.cloudflare.com/client/v4"
+          domain_url = api + "/accounts/" + account + "/pages/projects/" + project + "/domains/" + host
 
           def req(method, url, body=None):
               data = None if body is None else json.dumps(body).encode()
@@ -64,13 +62,21 @@ jobs:
                       payload = {"success": False, "errors": [{"message": raw[:500]}]}
                   return error.code, payload
 
-          def summarize(payload):
+          def errors_of(payload):
+              return [
+                  {"code": item.get("code"), "message": item.get("message")}
+                  for item in (payload.get("errors") or [])
+              ]
+
+          def error_text(payload):
+              return " ".join((item.get("message") or "") for item in errors_of(payload)).lower()
+
+          def show_domain(label, status, payload):
               result = payload.get("result") or {}
               validation = result.get("validation_data") or {}
               verification = result.get("verification_data") or {}
-              errors = payload.get("errors") or []
-              print(json.dumps({
-                  "http_success": payload.get("success"),
+              print(label, status, json.dumps({
+                  "success": payload.get("success"),
                   "name": result.get("name"),
                   "status": result.get("status"),
                   "zone_tag": result.get("zone_tag"),
@@ -79,71 +85,163 @@ jobs:
                   "validation_error": validation.get("error_message"),
                   "verification_status": verification.get("status"),
                   "verification_error": verification.get("error_message"),
-                  "api_errors": [
-                      {"code": item.get("code"), "message": item.get("message")}
-                      for item in errors
-                  ],
-              }, indent=2))
+                  "api_errors": errors_of(payload),
+              }), flush=True)
 
-          def error_text(payload):
-              return " ".join(
-                  (item.get("message") or "") for item in (payload.get("errors") or [])
-              ).lower()
+          def show_records(label, payload):
+              rows = []
+              for record in payload.get("result") or []:
+                  rows.append({
+                      "id": record.get("id"),
+                      "type": record.get("type"),
+                      "name": record.get("name"),
+                      "content": record.get("content"),
+                      "proxied": record.get("proxied"),
+                  })
+              print(label, json.dumps(rows), flush=True)
 
-          status, payload = req("GET", base + "/" + host)
-          print("GET", status)
-          summarize(payload)
+          status, payload = req("GET", domain_url)
+          show_domain("GET domain", status, payload)
           present = status == 200 and payload.get("success") and (payload.get("result") or {}).get("name")
           if not present:
-              message = error_text(payload)
-              if status not in (404, 400) and "not found" not in message and "could not find" not in message:
-                  # A 403 here means the token cannot read Pages domains. Still try to add.
-                  if status not in (403,):
-                      print("domain lookup failed")
-              print("POST", host)
-              status, payload = req("POST", base, {"name": host})
-              print("POST", status)
-              summarize(payload)
+              print("POST domain", host, flush=True)
+              status, payload = req("POST", domain_url.rsplit("/", 1)[0], {"name": host})
+              show_domain("POST domain", status, payload)
               message = error_text(payload)
               if "another project" in message or "different project" in message:
                   sys.exit("domain is attached to a different project; leaving it alone")
               if not payload.get("success"):
-                  if "already" in message or "exists" in message:
-                      status, payload = req("GET", base + "/" + host)
-                      print("GET after already-exists", status)
-                      summarize(payload)
-                  else:
+                  if "already" not in message and "exists" not in message:
+                      sys.exit("failed to add custom domain")
+                  status, payload = req("GET", domain_url)
+                  show_domain("GET domain", status, payload)
+                  if not (payload.get("result") or {}).get("name"):
                       sys.exit("failed to add custom domain")
 
-          retried = False
-          for attempt in range(1, 41):
-              # curl -I does not follow redirects; 200 has to come from this hostname.
+          zone_id = (payload.get("result") or {}).get("zone_tag")
+          if not zone_id:
+              sys.exit("Pages domain response did not include zone_tag")
+
+          project_status, project_payload = req(
+              "GET", api + "/accounts/" + account + "/pages/projects/" + project
+          )
+          subdomain = ((project_payload.get("result") or {}).get("subdomain") or "").rstrip(".")
+          print("project", project_status, "subdomain", subdomain or "(missing)", "errors", errors_of(project_payload), flush=True)
+          if not subdomain:
+              subdomain = project + ".pages.dev"
+
+          reference_status, reference = req(
+              "GET",
+              api + "/zones/" + zone_id + "/dns_records?name=new.heatherwolfeart.com",
+          )
+          print("reference lookup", reference_status, errors_of(reference), flush=True)
+          if reference.get("success"):
+              show_records("reference new.heatherwolfeart.com", reference)
+
+          record_status, records = req(
+              "GET", api + "/zones/" + zone_id + "/dns_records?name=" + host
+          )
+          print("dns lookup", record_status, errors_of(records), flush=True)
+          if record_status == 403 or (not records.get("success") and record_status != 200):
+              sys.exit("cannot read DNS for " + host + "; token needs Zone DNS Read/Edit on heatherwolfeart.com")
+          show_records("dns " + host, records)
+
+          def same_target(record):
+              content = (record.get("content") or "").rstrip(".").lower()
+              return (
+                  record.get("type") == "CNAME"
+                  and content == subdomain.lower()
+                  and record.get("proxied") is True
+              )
+
+          existing = records.get("result") or []
+          created_id = None
+          if any(same_target(record) for record in existing):
+              print("proxied CNAME already points at", subdomain, flush=True)
+          else:
+              for record in existing:
+                  print("removing conflicting record", record.get("id"), record.get("type"), record.get("content"), flush=True)
+                  delete_status, deleted = req(
+                      "DELETE", api + "/zones/" + zone_id + "/dns_records/" + record["id"]
+                  )
+                  print("DELETE dns", delete_status, deleted.get("success"), errors_of(deleted), flush=True)
+                  if not deleted.get("success"):
+                      sys.exit("failed to remove conflicting DNS record")
+              print("POST CNAME", host, "->", subdomain, "proxied", flush=True)
+              create_status, created = req(
+                  "POST",
+                  api + "/zones/" + zone_id + "/dns_records",
+                  {
+                      "type": "CNAME",
+                      "name": host,
+                      "content": subdomain,
+                      "proxied": True,
+                      "ttl": 1,
+                  },
+              )
+              created_result = created.get("result") or {}
+              print(
+                  "POST dns",
+                  create_status,
+                  created.get("success"),
+                  created_result.get("id"),
+                  created_result.get("type"),
+                  created_result.get("name"),
+                  created_result.get("content"),
+                  created_result.get("proxied"),
+                  errors_of(created),
+                  flush=True,
+              )
+              if not created.get("success"):
+                  message = error_text(created)
+                  if "already exists" not in message:
+                      sys.exit("failed to create DNS record")
+              else:
+                  created_id = created_result.get("id")
+
+          print("PATCH retry validation", flush=True)
+          patch_status, patched = req("PATCH", domain_url)
+          show_domain("PATCH domain", patch_status, patched)
+
+          last_code = "000"
+          saw_522 = False
+          for attempt in range(1, 33):
               probe = subprocess.run(
                   [
-                      "curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}",
+                      "curl", "-sS", "-D", "-", "-o", "/dev/null",
+                      "-w", "\nhttp_code:%{http_code}\n",
                       "-I", "--max-time", "20", "https://" + host + "/",
                   ],
                   capture_output=True, text=True,
               )
-              code = (probe.stdout or "").strip() or "curl-failed"
-              if probe.returncode != 0:
+              output = (probe.stdout or "") + (probe.stderr or "")
+              code = "000"
+              for line in output.splitlines():
+                  if line.startswith("http_code:"):
+                      code = line.split(":", 1)[1].strip()
+              if probe.returncode != 0 and code in ("000", ""):
                   code = "curl-" + str(probe.returncode)
-              print("https attempt", attempt, code)
+              last_code = code
+              interesting = [line for line in output.splitlines() if line.lower().startswith((
+                  "http/", "server:", "cf-ray:", "location:", "http_code:", "curl:"
+              ))]
+              print("https attempt", attempt, code, " | ".join(interesting[-6:]), flush=True)
               if code == "200":
                   sys.exit(0)
-              status, payload = req("GET", base + "/" + host)
-              result = payload.get("result") or {}
-              domain_status = result.get("status")
-              validation = result.get("validation_data") or {}
-              print("domain status", domain_status, "validation", validation.get("status"), validation.get("error_message"))
-              if domain_status in ("error", "deactivated", "blocked") and not retried:
-                  retried = True
-                  print("PATCH retry validation")
-                  patch_status, patch_payload = req("PATCH", base + "/" + host)
-                  print("PATCH", patch_status)
-                  summarize(patch_payload)
+              if code == "522":
+                  saw_522 = True
+              if attempt % 4 == 0:
+                  status, payload = req("GET", domain_url)
+                  show_domain("GET domain", status, payload)
               time.sleep(15)
-          sys.exit("https://" + host + "/ did not return 200")
+
+          if saw_522 and created_id and last_code == "522":
+              print("removing CNAME created this run after HTTP 522", created_id, flush=True)
+              delete_status, deleted = req(
+                  "DELETE", api + "/zones/" + zone_id + "/dns_records/" + created_id
+              )
+              print("DELETE dns", delete_status, deleted.get("success"), errors_of(deleted), flush=True)
+          sys.exit("https://" + host + "/ did not return 200 (last " + last_code + ")")
           PY
       - name: Confirm the custom domain serves the Pages project
         run: |
