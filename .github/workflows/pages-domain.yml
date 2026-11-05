@@ -130,6 +130,15 @@ jobs:
           if not subdomain:
               subdomain = project + ".pages.dev"
 
+          zone_status, zones = req("GET", api + "/zones?name=heatherwolfeart.com")
+          zone_rows = [
+              {"id": zone.get("id"), "name": zone.get("name"), "status": zone.get("status")}
+              for zone in (zones.get("result") or [])
+          ]
+          print("zones", zone_status, zone_rows, errors_of(zones), "zone_tag_match", any(zone.get("id") == zone_id for zone in zone_rows), flush=True)
+          if zone_rows and zone_rows[0].get("id"):
+              zone_id = zone_rows[0]["id"]
+
           reference_status, reference = req(
               "GET",
               api + "/zones/" + zone_id + "/dns_records?name=new.heatherwolfeart.com",
@@ -142,9 +151,12 @@ jobs:
               "GET", api + "/zones/" + zone_id + "/dns_records?name=" + host
           )
           print("dns lookup", record_status, errors_of(records), flush=True)
-          if record_status == 403 or (not records.get("success") and record_status != 200):
-              sys.exit("cannot read DNS for " + host + "; token needs Zone DNS Read/Edit on heatherwolfeart.com")
-          show_records("dns " + host, records)
+          dns_readable = record_status == 200 and records.get("success")
+          if not dns_readable:
+              print("DNS read unavailable; attempting to create the CNAME anyway", flush=True)
+              records = {"result": []}
+          else:
+              show_records("dns " + host, records)
 
           def same_target(record):
               content = (record.get("content") or "").rstrip(".").lower()
