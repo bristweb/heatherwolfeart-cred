@@ -1,8 +1,8 @@
 # Heather Wolfe Art — reviews data
 
-Every public review of **[Heather Wolfe Art](https://heatherwolfeart.com/)** (live wedding & event painting, Knoxville TN), plus the settings and theme for its reviews widget. The widget code and its documentation live in **[bristweb/cred](https://github.com/bristweb/cred)** (including a short [feature comparison](https://github.com/bristweb/cred/blob/main/COMPARISON.md) with hosted review-widget SaaS and reputation platforms); this repo holds the data plus this site's own [sync tooling](#sync-tooling). Cloudflare Pages serves these files at `https://heather-wolfe-art-reviews.pages.dev/` (deployed by `.github/workflows/deploy.yml`); GitHub Pages at `https://bristweb.github.io/heather-wolfe-art-reviews/` is the backup.
+Every public review of **[Heather Wolfe Art](https://heatherwolfeart.com/)** (live wedding & event painting, Knoxville TN), plus the settings and theme for its reviews widget. The widget code and its documentation live in **[bristweb/cred](https://github.com/bristweb/cred)** (including a short [feature comparison](https://github.com/bristweb/cred/blob/main/COMPARISON.md) with hosted review-widget SaaS and reputation platforms); this repo holds the data plus this site's own [sync tooling](#sync-tooling). Cloudflare Pages serves these files at `https://heatherwolfeart-cred.pages.dev/` (deployed by `.github/workflows/deploy.yml`); GitHub Pages at `https://bristweb.github.io/heatherwolfeart-cred/` is the backup.
 
-- **Live widget:** https://cred.bristleconeweb.com/?source=https://heather-wolfe-art-reviews.pages.dev/
+- **Live widget:** https://cred.bristleconeweb.com/?source=https://heatherwolfeart-cred.pages.dev/
 - **Settings:** [`config.js`](config.js) · **Reviews:** [`reviews/`](reviews/) (one file per year)
 
 ## Contents
@@ -22,21 +22,21 @@ JavaScript (recommended), where the widget should appear:
 
 ```html
 <script src="https://cred.bristleconeweb.com/assets/js/cred.js"
-        data-source="https://heather-wolfe-art-reviews.pages.dev/" defer></script>
+        data-source="https://heatherwolfeart-cred.pages.dev/" defer></script>
 ```
 
 Google Sites or any other fixed-height box (*Insert → Embed → Embed code*, then drag the box to about 420px tall) — one toggle:
 
 ```html
 <script src="https://cred.bristleconeweb.com/assets/js/cred.js"
-        data-source="https://heather-wolfe-art-reviews.pages.dev/"
+        data-source="https://heatherwolfeart-cred.pages.dev/"
         data-constrained="true"></script>
 ```
 
 Iframe:
 
 ```html
-<iframe id="reviews-widget" src="https://cred.bristleconeweb.com/embed.html?source=https://heather-wolfe-art-reviews.pages.dev/"
+<iframe id="reviews-widget" src="https://cred.bristleconeweb.com/embed.html?source=https://heatherwolfeart-cred.pages.dev/"
         title="Reviews" loading="lazy" scrolling="no" style="width:100%;border:0;height:420px"></iframe>
 <script>
   addEventListener('message', function (e) {
