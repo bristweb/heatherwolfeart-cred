@@ -1,10 +1,10 @@
 # Attaches cred.heatherwolfeart.com to the heatherwolfeart-cred Pages project.
 # Wrangler 4 has no `pages domain` command. The Pages domains API registers the
-# hostname (and the certificate) but does not publish DNS on its own: the first
-# run left the domain "pending" and the name did not resolve. This workflow
-# registers the hostname first, then ensures the proxied CNAME the dashboard
-# would create (same shape as new.heatherwolfeart.com). A CNAME created before
-# that registration returns Cloudflare 522.
+# hostname; with the current token it does not publish DNS (verification_error
+# "CNAME record not set"). This workflow then ensures the proxied CNAME the
+# dashboard would create (cred -> heatherwolfeart-cred.pages.dev), which needs
+# Zone DNS Edit on CLOUDFLARE_API_TOKEN. A CNAME created before the Pages
+# registration returns Cloudflare 522, so the domain is registered first.
 name: Ensure Pages custom domain
 on:
   workflow_dispatch:
@@ -207,6 +207,14 @@ jobs:
               if not created.get("success"):
                   message = error_text(created)
                   if "already exists" not in message:
+                      if create_status == 403:
+                          sys.exit(
+                              "Pages domain is registered but CLOUDFLARE_API_TOKEN cannot edit DNS "
+                              "(verification_error: CNAME record not set). Add Zone DNS Edit for "
+                              "heatherwolfeart.com to that existing token, then rerun. "
+                              "Expected record: proxied CNAME "
+                              + host + " -> " + subdomain
+                          )
                       sys.exit("failed to create DNS record")
               else:
                   created_id = created_result.get("id")
