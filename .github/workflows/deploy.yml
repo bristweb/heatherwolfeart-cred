@@ -21,6 +21,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
+          npx --yes wrangler@4 pages project create heatherwolfeart-cred --production-branch main || true
           npx --yes wrangler@4 pages deploy dist --project-name heatherwolfeart-cred --branch main
           # Legacy address: the live embed on heatherwolfeart.com still reads data from it.
           npx --yes wrangler@4 pages deploy dist --project-name heather-wolfe-art-reviews --branch main
