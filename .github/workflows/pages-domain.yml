@@ -1,0 +1,115 @@
+# Ensures cred.heatherwolfeart.com is a custom domain on the heatherwolfeart-cred
+# Pages project. DNS for that hostname is managed on the zone, outside this
+# workflow. Wrangler 4 has no `pages domain` command, so this calls the Pages
+# domains API and does nothing when the hostname is already attached.
+name: Ensure Pages custom domain
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - .github/workflows/pages-domain.yml
+permissions: {}
+jobs:
+  domain:
+    # Fork PRs cannot read CLOUDFLARE_API_TOKEN. Same-repo PRs can.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Attach cred.heatherwolfeart.com
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python3 - << 'PY'
+          import json, os, sys, urllib.error, urllib.request
+
+          token = os.environ.get("CLOUDFLARE_API_TOKEN") or ""
+          account = os.environ.get("CLOUDFLARE_ACCOUNT_ID") or ""
+          if not token or not account:
+              sys.exit("CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are required")
+
+          project = "heatherwolfeart-cred"
+          host = "cred.heatherwolfeart.com"
+          base = (
+              "https://api.cloudflare.com/client/v4/accounts/"
+              + account
+              + "/pages/projects/"
+              + project
+              + "/domains"
+          )
+
+          def req(method, url, body=None):
+              data = None if body is None else json.dumps(body).encode()
+              request = urllib.request.Request(
+                  url,
+                  data=data,
+                  method=method,
+                  headers={
+                      "Authorization": "Bearer " + token,
+                      "Content-Type": "application/json",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=60) as response:
+                      return response.status, json.load(response)
+              except urllib.error.HTTPError as error:
+                  raw = error.read().decode("utf-8", "replace")
+                  try:
+                      payload = json.loads(raw)
+                  except json.JSONDecodeError:
+                      payload = {"success": False, "errors": [{"message": raw[:500]}]}
+                  return error.code, payload
+
+          def show(label, status, payload):
+              result = payload.get("result") or {}
+              validation = result.get("validation_data") or {}
+              verification = result.get("verification_data") or {}
+              errors = [
+                  {"code": item.get("code"), "message": item.get("message")}
+                  for item in (payload.get("errors") or [])
+              ]
+              print(label, status, json.dumps({
+                  "success": payload.get("success"),
+                  "name": result.get("name"),
+                  "status": result.get("status"),
+                  "zone_tag": result.get("zone_tag"),
+                  "validation_status": validation.get("status"),
+                  "validation_method": validation.get("method"),
+                  "validation_error": validation.get("error_message"),
+                  "verification_status": verification.get("status"),
+                  "verification_error": verification.get("error_message"),
+                  "api_errors": errors,
+              }), flush=True)
+
+          status, payload = req("GET", base + "/" + host)
+          show("GET", status, payload)
+          present = status == 200 and payload.get("success") and (payload.get("result") or {}).get("name") == host
+          if present:
+              sys.exit(0)
+
+          message = " ".join(
+              (item.get("message") or "") for item in (payload.get("errors") or [])
+          ).lower()
+          print("POST", host, flush=True)
+          status, payload = req("POST", base, {"name": host})
+          show("POST", status, payload)
+          if payload.get("success") and (payload.get("result") or {}).get("name") == host:
+              sys.exit(0)
+          if "another project" in message or "different project" in message:
+              sys.exit("domain is attached to a different project; leaving it alone")
+          post_message = " ".join(
+              (item.get("message") or "") for item in (payload.get("errors") or [])
+          ).lower()
+          if "another project" in post_message or "different project" in post_message:
+              sys.exit("domain is attached to a different project; leaving it alone")
+          if "already" in post_message or "exists" in post_message:
+              status, payload = req("GET", base + "/" + host)
+              show("GET", status, payload)
+              if (payload.get("result") or {}).get("name") == host:
+                  sys.exit(0)
+          sys.exit("failed to attach " + host)
+          PY

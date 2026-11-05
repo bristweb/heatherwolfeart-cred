@@ -22,5 +22,6 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           npx --yes wrangler@4 pages deploy dist --project-name heatherwolfeart-cred --branch main
+          # cred.heatherwolfeart.com is attached by pages-domain.yml (Pages domains API).
           # Legacy address: the live embed on heatherwolfeart.com still reads data from it.
           npx --yes wrangler@4 pages deploy dist --project-name heather-wolfe-art-reviews --branch main
